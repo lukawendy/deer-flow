@@ -84,6 +84,34 @@ def _get_skills_host_path() -> str | None:
     return None
 
 
+def _get_request_workspaces_container_path() -> str:
+    return os.getenv("DEERFLOW_REQUEST_WORKSPACES_CONTAINER_PATH", _DEFAULT_REQUEST_WORKSPACES_CONTAINER_PATH)
+
+
+def _get_request_workspaces_host_path() -> str | None:
+    host_path = os.getenv("DEERFLOW_REQUEST_WORKSPACES_HOST_PATH", _DEFAULT_REQUEST_WORKSPACES_HOST_PATH)
+    path = Path(host_path)
+    if path.exists():
+        return str(path.resolve())
+    return None
+
+
+def _is_request_workspaces_path(path: str) -> bool:
+    prefix = _get_request_workspaces_container_path()
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _resolve_request_workspaces_path(path: str) -> str:
+    container = _get_request_workspaces_container_path()
+    host = _get_request_workspaces_host_path()
+    if host is None:
+        raise FileNotFoundError(f"Request workspaces directory not available for path: {path}")
+    if path == container:
+        return host
+    relative = path[len(container):].lstrip("/")
+    return str(Path(host) / relative) if relative else host
+
+
 def _is_skills_path(path: str) -> bool:
     """Check if a path is under the skills container path."""
     skills_prefix = _get_skills_container_path()
@@ -500,13 +528,33 @@ def mask_local_paths_in_output(output: str, thread_data: ThreadDataState | None)
 
     # Mask user-data host paths
     if thread_data is None:
+        thread_mappings = {}
+    else:
+        thread_mappings = _thread_actual_to_virtual_mappings(thread_data)
+
+    # Mask request workspace host paths
+    request_host = _get_request_workspaces_host_path()
+    request_container = _get_request_workspaces_container_path()
+    if request_host:
+        raw_base = str(Path(request_host))
+        resolved_base = str(Path(request_host).resolve())
+        for base in _path_variants(raw_base) | _path_variants(resolved_base):
+            escaped = re.escape(base).replace(r"\\", r"[/\\]")
+            pattern = re.compile(escaped + r"(?:[/\\][^\s\"';&|<>()]*)?")
+
+            def replace_request_workspace(match: re.Match, _base: str = base) -> str:
+                matched_path = match.group(0)
+                if matched_path == _base:
+                    return request_container
+                relative = matched_path[len(_base):].lstrip("/\\")
+                return f"{request_container}/{relative}" if relative else request_container
+
+            result = pattern.sub(replace_request_workspace, result)
+
+    if not thread_mappings:
         return result
 
-    mappings = _thread_actual_to_virtual_mappings(thread_data)
-    if not mappings:
-        return result
-
-    for actual_base, virtual_base in sorted(mappings.items(), key=lambda item: len(item[0]), reverse=True):
+    for actual_base, virtual_base in sorted(thread_mappings.items(), key=lambda item: len(item[0]), reverse=True):
         raw_base = str(Path(actual_base))
         resolved_base = str(Path(actual_base).resolve())
         for base in _path_variants(raw_base) | _path_variants(resolved_base):
@@ -572,6 +620,9 @@ def validate_local_tool_path(path: str, thread_data: ThreadDataState | None, *, 
     if _is_acp_workspace_path(path):
         if not read_only:
             raise PermissionError(f"Write access to ACP workspace is not allowed: {path}")
+
+    # Shared request workspaces — allowed for read and write in platform integrations
+    if _is_request_workspaces_path(path):
         return
 
     # User-data paths
@@ -685,7 +736,11 @@ def validate_local_bash_command_paths(command: str, thread_data: ThreadDataState
 
     if unsafe_paths:
         unsafe = ", ".join(sorted(dict.fromkeys(unsafe_paths)))
-        raise PermissionError(f"Unsafe absolute paths in command: {unsafe}. Use paths under {VIRTUAL_PATH_PREFIX}")
+        raise PermissionError(
+            "Unsafe absolute paths in command: "
+            f"{unsafe}. Use paths under {VIRTUAL_PATH_PREFIX}, "
+            f"{_ACP_WORKSPACE_VIRTUAL_PATH}, or {_get_request_workspaces_container_path()}"
+        )
 
 
 def replace_virtual_paths_in_command(command: str, thread_data: ThreadDataState | None) -> str:
@@ -1021,7 +1076,6 @@ def ls_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, path:
             elif _is_acp_workspace_path(path):
                 path = _resolve_acp_workspace_path(path, _extract_thread_id_from_thread_data(thread_data))
             elif not _is_custom_mount_path(path):
-                path = _resolve_and_validate_user_data_path(path, thread_data)
             # Custom mount paths are resolved by LocalSandbox._resolve_path()
         children = sandbox.list_dir(path)
         if not children:
@@ -1185,7 +1239,6 @@ def read_file_tool(
             elif _is_acp_workspace_path(path):
                 path = _resolve_acp_workspace_path(path, _extract_thread_id_from_thread_data(thread_data))
             elif not _is_custom_mount_path(path):
-                path = _resolve_and_validate_user_data_path(path, thread_data)
             # Custom mount paths are resolved by LocalSandbox._resolve_path()
         content = sandbox.read_file(path)
         if not content:
