@@ -23,6 +23,16 @@ def _read_system_prompt_file(path: str) -> str:
     return content
 
 
+def _resolve_custom_system_prompt(custom: Any) -> str | None:
+    """Resolve a custom subagent prompt from file-backed persona plus inline patch."""
+    prompt_parts: list[str] = []
+    if custom.system_prompt_file:
+        prompt_parts.append(_read_system_prompt_file(custom.system_prompt_file))
+    if custom.system_prompt:
+        prompt_parts.append(custom.system_prompt.strip())
+    return "\n\n".join(part for part in prompt_parts if part)
+
+
 def _resolve_subagents_app_config(app_config: Any | None = None):
     if app_config is None:
         from deerflow.config.subagents_config import get_subagents_app_config
@@ -46,7 +56,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
     if custom is None:
         return None
 
-    system_prompt = _read_system_prompt_file(custom.system_prompt_file) if custom.system_prompt_file else custom.system_prompt
+    system_prompt = _resolve_custom_system_prompt(custom)
     if not system_prompt:
         raise ValueError(f"Custom subagent '{name}' requires system_prompt or system_prompt_file")
 

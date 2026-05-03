@@ -384,6 +384,28 @@ class TestRegistryCustomAgentLookup:
         assert config is not None
         assert config.system_prompt == "You are a security auditor from disk."
 
+    def test_custom_agent_system_prompt_file_is_base_and_inline_prompt_is_patch(self, tmp_path):
+        from deerflow.subagents.registry import get_subagent_config
+
+        prompt_file = tmp_path / "security-auditor.md"
+        prompt_file.write_text("Base persona from disk.", encoding="utf-8")
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "security-auditor": {
+                        "description": "Security review specialist",
+                        "system_prompt_file": str(prompt_file),
+                        "system_prompt": "Project-specific review focus.",
+                    },
+                },
+            }
+        )
+
+        config = get_subagent_config("security-auditor")
+
+        assert config is not None
+        assert config.system_prompt == "Base persona from disk.\n\nProject-specific review focus."
+
     def test_custom_agent_found_from_explicit_app_config_without_global_config(self, monkeypatch):
         from deerflow.subagents.registry import get_subagent_config
 

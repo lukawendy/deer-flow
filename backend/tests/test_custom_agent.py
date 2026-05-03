@@ -38,6 +38,12 @@ def _write_agent(base_dir: Path, name: str, config: dict, soul: str = "You are h
     (agent_dir / "SOUL.md").write_text(soul, encoding="utf-8")
 
 
+def _read_config(config_path: Path) -> dict:
+    """Read a YAML config file."""
+    with open(config_path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 # ===========================================================================
 # 1. Paths class – agent path methods
 # ===========================================================================
@@ -392,14 +398,21 @@ def agent_client(tmp_path):
     import app.gateway.routers.agents as agents_router
 
     paths_instance = _make_paths(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agents_api:\n  enabled: true\nsubagents:\n  custom_agents: {}\n", encoding="utf-8")
     previous_config = AgentsApiConfig(**get_agents_api_config().model_dump())
 
-    with patch("deerflow.config.agents_config.get_paths", return_value=paths_instance), patch.object(agents_router, "get_paths", return_value=paths_instance):
+    with (
+        patch("deerflow.config.agents_config.get_paths", return_value=paths_instance),
+        patch("deerflow.config.app_config.AppConfig.resolve_config_path", return_value=config_path),
+        patch.object(agents_router, "get_paths", return_value=paths_instance),
+    ):
         set_agents_api_config(AgentsApiConfig(enabled=True))
         try:
             app = _make_test_app(tmp_path)
             with TestClient(app) as client:
                 client._tmp_path = tmp_path  # type: ignore[attr-defined]
+                client._config_path = config_path  # type: ignore[attr-defined]
                 yield client
         finally:
             set_agents_api_config(previous_config)
@@ -411,9 +424,15 @@ def disabled_agent_client(tmp_path):
     import app.gateway.routers.agents as agents_router
 
     paths_instance = _make_paths(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agents_api:\n  enabled: false\nsubagents:\n  custom_agents: {}\n", encoding="utf-8")
     previous_config = AgentsApiConfig(**get_agents_api_config().model_dump())
 
-    with patch("deerflow.config.agents_config.get_paths", return_value=paths_instance), patch.object(agents_router, "get_paths", return_value=paths_instance):
+    with (
+        patch("deerflow.config.agents_config.get_paths", return_value=paths_instance),
+        patch("deerflow.config.app_config.AppConfig.resolve_config_path", return_value=config_path),
+        patch.object(agents_router, "get_paths", return_value=paths_instance),
+    ):
         set_agents_api_config(AgentsApiConfig(enabled=False))
         try:
             app = _make_test_app(tmp_path)
@@ -553,7 +572,95 @@ class TestAgentsAPI:
 
 
 # ===========================================================================
-# 9. Gateway API – User Profile endpoints
+# 9. Gateway API – Subagent endpoints
+# ===========================================================================
+
+
+class TestSubagentsAPI:
+    def test_list_subagents_empty(self, agent_client):
+        response = agent_client.get("/api/subagents")
+
+        assert response.status_code == 200
+        assert response.json()["subagents"] == []
+
+    def test_create_subagent_persists_config_yaml(self, agent_client):
+        payload = {
+            "name": "security-auditor",
+            "description": "Reviews PRs for security regressions",
+            "system_prompt_file": "skills/security-auditor/SKILL.md",
+            "system_prompt": "Focus on authentication and secret handling.",
+            "model": "gpt-5.4",
+            "tools": ["read_file", "bash"],
+            "disallowed_tools": ["task"],
+            "skills": ["security-audit"],
+            "max_turns": 40,
+            "timeout_seconds": 300,
+        }
+
+        response = agent_client.post("/api/subagents", json=payload)
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "security-auditor"
+        assert data["system_prompt_file"] == "skills/security-auditor/SKILL.md"
+        assert data["system_prompt"] == "Focus on authentication and secret handling."
+
+        config = _read_config(agent_client._config_path)  # type: ignore[attr-defined]
+        stored = config["subagents"]["custom_agents"]["security-auditor"]
+        assert stored["description"] == "Reviews PRs for security regressions"
+        assert stored["system_prompt_file"] == "skills/security-auditor/SKILL.md"
+        assert stored["system_prompt"] == "Focus on authentication and secret handling."
+        assert stored["model"] == "gpt-5.4"
+        assert stored["tools"] == ["read_file", "bash"]
+        assert stored["disallowed_tools"] == ["task"]
+        assert stored["skills"] == ["security-audit"]
+        assert stored["max_turns"] == 40
+        assert stored["timeout_seconds"] == 300
+
+    def test_update_subagent_supports_explicit_nulls_and_empty_lists(self, agent_client):
+        agent_client.post(
+            "/api/subagents",
+            json={
+                "name": "reviewer",
+                "description": "Reviews code",
+                "system_prompt": "Base prompt",
+                "model": "gpt-5.4",
+                "skills": ["code-review"],
+            },
+        )
+
+        response = agent_client.put(
+            "/api/subagents/reviewer",
+            json={"system_prompt": "Updated prompt", "model": "inherit", "skills": [], "tools": None},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["system_prompt"] == "Updated prompt"
+        assert data["model"] == "inherit"
+        assert data["skills"] == []
+        assert data["tools"] is None
+
+    def test_delete_subagent_removes_config_yaml_entry(self, agent_client):
+        agent_client.post(
+            "/api/subagents",
+            json={"name": "cleanup-reviewer", "description": "Reviews cleanup", "system_prompt": "Review cleanup."},
+        )
+
+        response = agent_client.delete("/api/subagents/cleanup-reviewer")
+
+        assert response.status_code == 204
+        config = _read_config(agent_client._config_path)  # type: ignore[attr-defined]
+        assert "cleanup-reviewer" not in config["subagents"]["custom_agents"]
+
+    def test_create_subagent_requires_prompt_source(self, agent_client):
+        response = agent_client.post("/api/subagents", json={"name": "missing-prompt", "description": "Invalid"})
+
+        assert response.status_code == 422
+
+
+# ===========================================================================
+# 10. Gateway API – User Profile endpoints
 # ===========================================================================
 
 
@@ -613,6 +720,20 @@ class TestAgentsApiDisabled:
     def test_agent_delete_returns_403(self, disabled_agent_client):
         response = disabled_agent_client.delete("/api/agents/example-agent")
         assert response.status_code == 403
+
+    def test_subagent_routes_return_403(self, disabled_agent_client):
+        list_response = disabled_agent_client.get("/api/subagents")
+        create_response = disabled_agent_client.post(
+            "/api/subagents",
+            json={"name": "reviewer", "description": "Reviews code", "system_prompt": "Review code."},
+        )
+        update_response = disabled_agent_client.put("/api/subagents/reviewer", json={"description": "blocked"})
+        delete_response = disabled_agent_client.delete("/api/subagents/reviewer")
+
+        assert list_response.status_code == 403
+        assert create_response.status_code == 403
+        assert update_response.status_code == 403
+        assert delete_response.status_code == 403
 
     def test_user_profile_routes_return_403(self, disabled_agent_client):
         get_response = disabled_agent_client.get("/api/user-profile")
