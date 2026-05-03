@@ -2,13 +2,35 @@
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
+from deerflow.config.runtime_paths import resolve_path
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 from deerflow.subagents.config import SubagentConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _read_system_prompt_file(path: str) -> str:
+    prompt_path = Path(path).expanduser()
+    if not prompt_path.is_absolute():
+        prompt_path = resolve_path(str(prompt_path))
+    content = prompt_path.read_text(encoding="utf-8").strip()
+    if not content:
+        raise ValueError(f"Custom subagent system_prompt_file is empty: {prompt_path}")
+    return content
+
+
+def _resolve_custom_system_prompt(custom: Any) -> str | None:
+    """Resolve a custom subagent prompt from file-backed persona plus inline patch."""
+    prompt_parts: list[str] = []
+    if custom.system_prompt_file:
+        prompt_parts.append(_read_system_prompt_file(custom.system_prompt_file))
+    if custom.system_prompt:
+        prompt_parts.append(custom.system_prompt.strip())
+    return "\n\n".join(part for part in prompt_parts if part)
 
 
 def _resolve_subagents_app_config(app_config: Any | None = None):
@@ -34,10 +56,14 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
     if custom is None:
         return None
 
+    system_prompt = _resolve_custom_system_prompt(custom)
+    if not system_prompt:
+        raise ValueError(f"Custom subagent '{name}' requires system_prompt or system_prompt_file")
+
     return SubagentConfig(
         name=name,
         description=custom.description,
-        system_prompt=custom.system_prompt,
+        system_prompt=system_prompt,
         tools=custom.tools,
         disallowed_tools=custom.disallowed_tools,
         skills=custom.skills,

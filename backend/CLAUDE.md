@@ -249,6 +249,7 @@ Proxied through nginx: `/api/langgraph/*` → LangGraph, all other `/api/*` → 
 ### Subagent System (`packages/harness/deerflow/subagents/`)
 
 **Built-in Agents**: `general-purpose` (all tools except `task`) and `bash` (command specialist)
+**Custom Agents**: Declared in `config.yaml` under `subagents.custom_agents`; each custom subagent can define `system_prompt` or `system_prompt_file`, tool/skill allowlists, model, max turns, and timeout. `system_prompt_file` paths may be absolute or relative to the DeerFlow project root and are read when the subagent config is resolved.
 **Execution**: Dual thread pool - `_scheduler_pool` (3 workers) + `_execution_pool` (3 workers)
 **Concurrency**: `MAX_CONCURRENT_SUBAGENTS = 3` enforced by `SubagentLimitMiddleware` (truncates excess tool calls in `after_model`), 15-minute timeout
 **Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result

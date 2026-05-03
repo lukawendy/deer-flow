@@ -289,6 +289,24 @@ class TestLoadSubagentsConfigWithSkills:
         assert custom.max_turns == 80
         assert custom.timeout_seconds == 600
 
+    def test_load_custom_agent_with_system_prompt_file(self, tmp_path):
+        prompt_file = tmp_path / "code-reviewer.md"
+        prompt_file.write_text("You are a file-backed reviewer.", encoding="utf-8")
+
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "code-reviewer": {
+                        "description": "Review code changes",
+                        "system_prompt_file": str(prompt_file),
+                    },
+                },
+            }
+        )
+
+        cfg = get_subagents_app_config()
+        assert cfg.custom_agents["code-reviewer"].system_prompt_file == str(prompt_file)
+
     def test_load_with_both_overrides_and_custom(self):
         load_subagents_config_from_dict(
             {
@@ -344,6 +362,49 @@ class TestRegistryCustomAgentLookup:
         assert config.max_turns == 80
         assert config.timeout_seconds == 600
         assert config.model == "inherit"
+
+    def test_custom_agent_system_prompt_loaded_from_file(self, tmp_path):
+        from deerflow.subagents.registry import get_subagent_config
+
+        prompt_file = tmp_path / "security-auditor.md"
+        prompt_file.write_text("You are a security auditor from disk.", encoding="utf-8")
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "security-auditor": {
+                        "description": "Security review specialist",
+                        "system_prompt_file": str(prompt_file),
+                    },
+                },
+            }
+        )
+
+        config = get_subagent_config("security-auditor")
+
+        assert config is not None
+        assert config.system_prompt == "You are a security auditor from disk."
+
+    def test_custom_agent_system_prompt_file_is_base_and_inline_prompt_is_patch(self, tmp_path):
+        from deerflow.subagents.registry import get_subagent_config
+
+        prompt_file = tmp_path / "security-auditor.md"
+        prompt_file.write_text("Base persona from disk.", encoding="utf-8")
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "security-auditor": {
+                        "description": "Security review specialist",
+                        "system_prompt_file": str(prompt_file),
+                        "system_prompt": "Project-specific review focus.",
+                    },
+                },
+            }
+        )
+
+        config = get_subagent_config("security-auditor")
+
+        assert config is not None
+        assert config.system_prompt == "Base persona from disk.\n\nProject-specific review focus."
 
     def test_custom_agent_found_from_explicit_app_config_without_global_config(self, monkeypatch):
         from deerflow.subagents.registry import get_subagent_config

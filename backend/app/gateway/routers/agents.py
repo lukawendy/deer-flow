@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 
 from deerflow.config.agents_api_config import get_agents_api_config
 from deerflow.config.agents_config import AgentConfig, list_custom_agents, load_agent_config, load_agent_soul
+from deerflow.config.app_config import AppConfig
 from deerflow.config.paths import get_paths
+from deerflow.config.subagents_config import CustomSubagentConfig, load_subagents_config_from_dict
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agents"])
@@ -54,6 +56,56 @@ class AgentUpdateRequest(BaseModel):
     tool_groups: list[str] | None = Field(default=None, description="Updated tool group whitelist")
     skills: list[str] | None = Field(default=None, description="Updated skill whitelist (None=all, []=none)")
     soul: str | None = Field(default=None, description="Updated SOUL.md content")
+
+
+class SubagentResponse(BaseModel):
+    """Response model for a managed custom subagent."""
+
+    name: str = Field(..., description="Subagent name (hyphen-case)")
+    description: str = Field(..., description="When the lead agent should delegate to this subagent")
+    system_prompt: str | None = Field(default=None, description="Inline system prompt or project-specific prompt patch")
+    system_prompt_file: str | None = Field(default=None, description="Path to a persona/system prompt file")
+    tools: list[str] | None = Field(default=None, description="Tool names whitelist")
+    disallowed_tools: list[str] | None = Field(default=None, description="Tool names to deny")
+    skills: list[str] | None = Field(default=None, description="Skill names whitelist")
+    model: str = Field(default="inherit", description="Model name or 'inherit'")
+    max_turns: int = Field(default=50, ge=1, description="Maximum number of agent turns")
+    timeout_seconds: int = Field(default=900, ge=1, description="Maximum execution time in seconds")
+
+
+class SubagentsListResponse(BaseModel):
+    """Response model for listing managed custom subagents."""
+
+    subagents: list[SubagentResponse]
+
+
+class SubagentCreateRequest(BaseModel):
+    """Request body for creating a custom subagent."""
+
+    name: str = Field(..., description="Subagent name (must match ^[A-Za-z0-9-]+$, stored as lowercase)")
+    description: str = Field(..., description="When the lead agent should delegate to this subagent")
+    system_prompt: str | None = Field(default=None, description="Inline system prompt or project-specific prompt patch")
+    system_prompt_file: str | None = Field(default=None, description="Path to a persona/system prompt file")
+    tools: list[str] | None = Field(default=None, description="Tool names whitelist")
+    disallowed_tools: list[str] | None = Field(default=None, description="Tool names to deny")
+    skills: list[str] | None = Field(default=None, description="Skill names whitelist")
+    model: str = Field(default="inherit", description="Model name or 'inherit'")
+    max_turns: int = Field(default=50, ge=1, description="Maximum number of agent turns")
+    timeout_seconds: int = Field(default=900, ge=1, description="Maximum execution time in seconds")
+
+
+class SubagentUpdateRequest(BaseModel):
+    """Request body for updating a custom subagent."""
+
+    description: str | None = Field(default=None, description="Updated description")
+    system_prompt: str | None = Field(default=None, description="Updated inline system prompt or prompt patch")
+    system_prompt_file: str | None = Field(default=None, description="Updated persona/system prompt file path")
+    tools: list[str] | None = Field(default=None, description="Updated tool names whitelist")
+    disallowed_tools: list[str] | None = Field(default=None, description="Updated tool names to deny")
+    skills: list[str] | None = Field(default=None, description="Updated skill names whitelist")
+    model: str | None = Field(default=None, description="Updated model name or 'inherit'")
+    max_turns: int | None = Field(default=None, ge=1, description="Updated maximum number of agent turns")
+    timeout_seconds: int | None = Field(default=None, ge=1, description="Updated maximum execution time in seconds")
 
 
 def _validate_agent_name(name: str) -> None:
@@ -100,6 +152,39 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         skills=agent_cfg.skills,
         soul=soul,
     )
+
+
+def _subagent_config_to_response(name: str, config: CustomSubagentConfig) -> SubagentResponse:
+    """Convert CustomSubagentConfig to SubagentResponse."""
+    return SubagentResponse(name=name, **config.model_dump())
+
+
+def _load_config_yaml() -> tuple[dict, str]:
+    """Load the active config.yaml and return its data plus resolved path."""
+    config_path = AppConfig.resolve_config_path()
+    with open(config_path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}, str(config_path)
+
+
+def _save_config_yaml(config_data: dict, config_path: str) -> None:
+    """Persist config.yaml and refresh singleton-backed subagent config."""
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    load_subagents_config_from_dict(config_data.get("subagents") or {})
+
+
+def _custom_subagents_section(config_data: dict) -> dict:
+    """Return the mutable subagents.custom_agents section, creating it if needed."""
+    subagents = config_data.setdefault("subagents", {})
+    return subagents.setdefault("custom_agents", {})
+
+
+def _validated_subagent_config(data: dict) -> CustomSubagentConfig:
+    """Validate a custom subagent payload with DeerFlow's runtime config model."""
+    try:
+        return CustomSubagentConfig(**data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.get(
@@ -322,6 +407,106 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
     except Exception as e:
         logger.error(f"Failed to update agent '{name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update agent: {str(e)}")
+
+
+@router.get(
+    "/subagents",
+    response_model=SubagentsListResponse,
+    summary="List Custom Subagents",
+    description="List user-defined subagent types managed in config.yaml subagents.custom_agents.",
+)
+async def list_subagents_endpoint() -> SubagentsListResponse:
+    """List custom subagents declared in config.yaml."""
+    _require_agents_api_enabled()
+
+    try:
+        config_data, _ = _load_config_yaml()
+        custom_agents = (config_data.get("subagents") or {}).get("custom_agents") or {}
+        responses = []
+        for name in sorted(custom_agents):
+            responses.append(_subagent_config_to_response(name, CustomSubagentConfig(**custom_agents[name])))
+        return SubagentsListResponse(subagents=responses)
+    except Exception as e:
+        logger.error(f"Failed to list subagents: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list subagents: {str(e)}")
+
+
+@router.post(
+    "/subagents",
+    response_model=SubagentResponse,
+    status_code=201,
+    summary="Create Custom Subagent",
+    description="Create a user-defined subagent in config.yaml subagents.custom_agents.",
+)
+async def create_subagent_endpoint(request: SubagentCreateRequest) -> SubagentResponse:
+    """Create a custom subagent."""
+    _require_agents_api_enabled()
+    _validate_agent_name(request.name)
+    normalized_name = _normalize_agent_name(request.name)
+
+    config_data, config_path = _load_config_yaml()
+    custom_agents = _custom_subagents_section(config_data)
+    if normalized_name in custom_agents:
+        raise HTTPException(status_code=409, detail=f"Subagent '{normalized_name}' already exists")
+
+    subagent_config = _validated_subagent_config(request.model_dump(exclude={"name"}))
+    custom_agents[normalized_name] = subagent_config.model_dump(exclude_none=True)
+    _save_config_yaml(config_data, config_path)
+
+    logger.info(f"Created subagent '{normalized_name}' in {config_path}")
+    return _subagent_config_to_response(normalized_name, subagent_config)
+
+
+@router.put(
+    "/subagents/{name}",
+    response_model=SubagentResponse,
+    summary="Update Custom Subagent",
+    description="Update a user-defined subagent in config.yaml subagents.custom_agents.",
+)
+async def update_subagent_endpoint(name: str, request: SubagentUpdateRequest) -> SubagentResponse:
+    """Update a custom subagent."""
+    _require_agents_api_enabled()
+    _validate_agent_name(name)
+    name = _normalize_agent_name(name)
+
+    config_data, config_path = _load_config_yaml()
+    custom_agents = _custom_subagents_section(config_data)
+    if name not in custom_agents:
+        raise HTTPException(status_code=404, detail=f"Subagent '{name}' not found")
+
+    fields_set = request.model_fields_set
+    updated = dict(custom_agents[name])
+    for field in fields_set:
+        updated[field] = getattr(request, field)
+
+    subagent_config = _validated_subagent_config(updated)
+    custom_agents[name] = subagent_config.model_dump(exclude_none=True)
+    _save_config_yaml(config_data, config_path)
+
+    logger.info(f"Updated subagent '{name}' in {config_path}")
+    return _subagent_config_to_response(name, subagent_config)
+
+
+@router.delete(
+    "/subagents/{name}",
+    status_code=204,
+    summary="Delete Custom Subagent",
+    description="Delete a user-defined subagent from config.yaml subagents.custom_agents.",
+)
+async def delete_subagent_endpoint(name: str) -> None:
+    """Delete a custom subagent."""
+    _require_agents_api_enabled()
+    _validate_agent_name(name)
+    name = _normalize_agent_name(name)
+
+    config_data, config_path = _load_config_yaml()
+    custom_agents = _custom_subagents_section(config_data)
+    if name not in custom_agents:
+        raise HTTPException(status_code=404, detail=f"Subagent '{name}' not found")
+
+    del custom_agents[name]
+    _save_config_yaml(config_data, config_path)
+    logger.info(f"Deleted subagent '{name}' from {config_path}")
 
 
 class UserProfileResponse(BaseModel):

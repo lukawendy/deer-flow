@@ -2,7 +2,7 @@
 
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,13 @@ class CustomSubagentConfig(BaseModel):
     description: str = Field(
         description="When the lead agent should delegate to this subagent",
     )
-    system_prompt: str = Field(
+    system_prompt: str | None = Field(
+        default=None,
         description="System prompt that guides the subagent's behavior",
+    )
+    system_prompt_file: str | None = Field(
+        default=None,
+        description="Path to a UTF-8 markdown/text file containing the subagent system prompt",
     )
     tools: list[str] | None = Field(
         default=None,
@@ -66,6 +71,12 @@ class CustomSubagentConfig(BaseModel):
         ge=1,
         description="Maximum execution time in seconds",
     )
+
+    @model_validator(mode="after")
+    def validate_prompt_source(self):
+        if not self.system_prompt and not self.system_prompt_file:
+            raise ValueError("custom subagents require either system_prompt or system_prompt_file")
+        return self
 
 
 class SubagentsAppConfig(BaseModel):
