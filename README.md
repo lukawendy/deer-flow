@@ -632,8 +632,6 @@ This is how DeerFlow handles tasks that take minutes to hours: a research task m
 
 Custom sub-agents can be declared in `config.yaml` under `subagents.custom_agents`. They can use inline `system_prompt` text or a `system_prompt_file`, which makes it practical to reuse persona files from a shared agent-skills repository. Each custom sub-agent can also choose its own model, tools, skills, turn limit, and timeout; config changes are picked up on the next app config reload without changing Python code.
 
-For PR review workflows, the `pr-multi-model-review` skill defines an artifact-based fan-out pattern: one review lead agent prepares PR metadata and patch files, launches configured reviewer sub-agents with different models or perspectives, and synthesizes their markdown reports into `/mnt/user-data/outputs/review_summary.md`.
-
 ### Sandbox & File System
 
 DeerFlow doesn't just *talk* about doing things. It has its own computer.
