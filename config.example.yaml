@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 8
+config_version: 9
 
 # ============================================================================
 # Logging
@@ -651,6 +651,34 @@ sandbox:
 #   #     model: inherit          # 'inherit' uses parent's model
 #   #     max_turns: 80
 #   #     timeout_seconds: 600
+#
+#   # Prompt files can be used instead of inline system_prompt content. This is
+#   # useful when reusing persona files from a skills/personas repository.
+#   # The path may be absolute or relative to the DeerFlow project root.
+#   #   code-reviewer-gpt5:
+#   #     description: "Code reviewer using GPT-5 for correctness and architecture"
+#   #     system_prompt_file: /path/to/agent-skills/agents/code-reviewer.md
+#   #     model: gpt-5
+#   #     tools: [ls, read_file, write_file, str_replace]
+#   #     skills: [code-review-and-quality]
+#   #     max_turns: 60
+#   #     timeout_seconds: 900
+#   #   security-auditor-claude:
+#   #     description: "Security auditor using Claude for vulnerability review"
+#   #     system_prompt_file: /path/to/agent-skills/agents/security-auditor.md
+#   #     model: claude-sonnet-4-5
+#   #     tools: [ls, read_file, write_file, str_replace]
+#   #     skills: [security-and-hardening]
+#   #     max_turns: 60
+#   #     timeout_seconds: 900
+#   #   test-engineer-gemini:
+#   #     description: "Test engineer using Gemini for coverage and regression review"
+#   #     system_prompt_file: /path/to/agent-skills/agents/test-engineer.md
+#   #     model: gemini-2.5-pro
+#   #     tools: [ls, read_file, write_file, str_replace]
+#   #     skills: [test-driven-development]
+#   #     max_turns: 60
+#   #     timeout_seconds: 900
 #
 #   # Model override: by default, subagents inherit the lead agent's model.
 #   # Set `model` to use a different model (e.g., a local Ollama model for cost savings).

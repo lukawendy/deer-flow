@@ -630,6 +630,10 @@ The lead agent can spawn sub-agents on the fly — each with its own scoped cont
 
 This is how DeerFlow handles tasks that take minutes to hours: a research task might fan out into a dozen sub-agents, each exploring a different angle, then converge into a single report — or a website — or a slide deck with generated visuals. One harness, many hands.
 
+Custom sub-agents can be declared in `config.yaml` under `subagents.custom_agents`. They can use inline `system_prompt` text or a `system_prompt_file`, which makes it practical to reuse persona files from a shared agent-skills repository. Each custom sub-agent can also choose its own model, tools, skills, turn limit, and timeout; config changes are picked up on the next app config reload without changing Python code.
+
+For PR review workflows, the `pr-multi-model-review` skill defines an artifact-based fan-out pattern: one review lead agent prepares PR metadata and patch files, launches configured reviewer sub-agents with different models or perspectives, and synthesizes their markdown reports into `/mnt/user-data/outputs/review_summary.md`.
+
 ### Sandbox & File System
 
 DeerFlow doesn't just *talk* about doing things. It has its own computer.
@@ -705,6 +709,7 @@ All dict-returning methods are validated against Gateway Pydantic response model
 - [Configuration Guide](backend/docs/CONFIGURATION.md) - Setup and configuration instructions
 - [Architecture Overview](backend/CLAUDE.md) - Technical architecture details
 - [Backend Architecture](backend/README.md) - Backend architecture and API reference
+- [AI Delivery Fork Workflow](docs/AI_DELIVERY_FORK_WORKFLOW.md) - Branching, upstream sync, and integration rules for the AI Delivery fork
 
 ## ⚠️ Security Notice
 
